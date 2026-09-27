@@ -197,7 +197,7 @@ public static class LevelBuilder
         Rigidbody2D rb = player.AddComponent<Rigidbody2D>();
         rb.gravityScale = 3f;
         rb.freezeRotation = true;
-        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        rb.interpolation = RigidbodyInterpolation2D.None;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
         CapsuleCollider2D col = player.AddComponent<CapsuleCollider2D>();
@@ -248,6 +248,12 @@ public static class LevelBuilder
         follow.followObject = player;
         follow.followOffset = new Vector2(cameraSize * 16f / 9f - 1.5f, 0f); // y offset 0: stay at the scene framing
         follow.speed = 3f;
+
+        CameraGroundLock groundLock = camGo.AddComponent<CameraGroundLock>();
+        groundLock.player = player.transform;
+        groundLock.groundCheck = player.transform.Find("GroundCheck");
+        groundLock.whatIsGround = 1 << groundLayer;
+        groundLock.clampUntilX = SceneRight;
 
     }
 
@@ -557,7 +563,13 @@ public static class LevelBuilder
         fall.AddComponent<BoxCollider2D>().size = new Vector2(courseEnd - SceneLeft + 40f, 4f);
         fall.AddComponent<trap>();
 
-        Finish((Islands - 1) * step + 22.4f, 0f);
+        Finish((Islands - 1) * step + 21.5f, 0f);
+
+        // End wall: the last section finishes against a tall cliff; this keeps the player from climbing past it.
+        GameObject endWall = new GameObject("End Wall");
+        endWall.transform.SetParent(level, false);
+        endWall.transform.position = new Vector2((Islands - 1) * step + SceneLeft + Terrain[Islands - 1].Length - 0.5f, 10f);
+        endWall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 30f);
 
         return new Vector2(SceneLeft + 0.6f, 1.6f);
     }
@@ -610,7 +622,7 @@ public static class LevelBuilder
         "210012210012210012211__1122111111", // 7 stairs
         "222222__111__000000__111222111111", // 8 broken ground
         "211000__000111222222111__11100011", // 9 plateau
-        "21111000111222__22211100011111111", // 10 finish
+        "211110001112__222111000111111115555", // 10 finish, ends at a tall cliff
     };
 
     // Decoration themes, as Nature_props sprite indices.
@@ -748,11 +760,11 @@ public static class LevelBuilder
                 break;
             default: // finish
                 Crate(X(6), Top(6), 2); Use(6);
-                Pendulum(X(12), Top(12), 60f); Use(12);
-                Spikes(X(23), Top(23)); Use(23);
-                Pendulum(X(27), Top(27), -60f); Use(27);
-                Ledge(14, 2);
-                Use(31);
+                Pendulum(X(15), Top(15), 60f); Use(15);
+                Spikes(X(21), Top(21)); Use(21);
+                Pendulum(X(26), Top(26), -60f); Use(26);
+                Ledge(12, 2);
+                Use(30);
                 break;
         }
 
