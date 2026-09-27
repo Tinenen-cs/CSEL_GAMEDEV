@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
@@ -13,11 +14,12 @@ public static class LevelBuilder
 {
     const string ScenePath = "Assets/Scenes/Level1.unity";
     const string PlayerSprites = "Assets/Sprites/Player/";
-    const string LevelSprites = "Assets/Sprites/Level/";
+    const string EnvSheet = "Assets/Nature_pixel_art_assets/textures/nature_environment_01.png";
+    const string PropSheet = "Assets/Nature_pixel_art_assets/textures/Nature_props_01.png";
     const string AnimFolder = "Assets/Animations/";
 
     static int groundLayer;
-    static Sprite groundSprite, crateSprite, spikeSprite, ballSprite, whiteSprite, plankSprite, flagSprite, bgSprite;
+    static Sprite[] envSprites, propSprites;
     static PhysicsMaterial2D noFriction;
 
     static LevelBuilder()
@@ -29,6 +31,8 @@ public static class LevelBuilder
     [MenuItem("Tools/Build Platformer Level")]
     public static void Build()
     {
+        foreach (string old in new[] { ScenePath, AnimFolder + "Player.controller", AnimFolder + "idle.anim", AnimFolder + "run.anim", AnimFolder + "jump.anim", "Assets/Sprites/PlayerNoFriction.physicsMaterial2D" })
+            AssetDatabase.DeleteAsset(old);
         SetInputHandlerToBoth();
         groundLayer = EnsureLayer("Ground");
         ImportSprites();
@@ -107,18 +111,15 @@ public static class LevelBuilder
             foreach (string file in Directory.GetFiles(PlayerSprites + dir, "*.png"))
                 ImportSprite(file.Replace('\\', '/'), 128f, false);
 
-        groundSprite = ImportSprite(LevelSprites + "ground.png", 64f, true);
-        crateSprite = ImportSprite(LevelSprites + "crate.png", 64f, true);
-        spikeSprite = ImportSprite(LevelSprites + "spikes.png", 64f, true);
-        ballSprite = ImportSprite(LevelSprites + "spikeball.png", 64f, true);
-        whiteSprite = ImportSprite(LevelSprites + "white.png", 16f, true);
-        plankSprite = ImportSprite(LevelSprites + "plank.png", 32f, true);
-        flagSprite = ImportSprite(LevelSprites + "flag.png", 32f, true);
-        bgSprite = ImportSprite(LevelSprites + "background.png", 100f, true);
+        envSprites = AssetDatabase.LoadAllAssetsAtPath(EnvSheet).OfType<Sprite>().ToArray();
+        propSprites = AssetDatabase.LoadAllAssetsAtPath(PropSheet).OfType<Sprite>().ToArray();
 
         noFriction = new PhysicsMaterial2D("PlayerNoFriction") { friction = 0f, bounciness = 0f };
         AssetDatabase.CreateAsset(noFriction, "Assets/Sprites/PlayerNoFriction.physicsMaterial2D");
     }
+
+    static Sprite Env(int i) { return envSprites.First(sp => sp.name == "nature_environment_01_" + i); }
+    static Sprite Prop(int i) { return propSprites.First(sp => sp.name == "Nature_props_01_" + i); }
 
     // ---------- animation ----------
 
@@ -244,14 +245,22 @@ public static class LevelBuilder
         follow.followOffset = new Vector2(8.5f, 4.5f);
         follow.speed = 3f;
 
-        // Background stage follows the camera.
+        // Background stage (sky tiles from the Nature pack) follows the camera.
         GameObject bg = new GameObject("Background");
         bg.transform.SetParent(camGo.transform, false);
         bg.transform.localPosition = new Vector3(0f, 0f, 20f);
-        bg.transform.localScale = new Vector3(1.4f, 1.4f, 1f);
-        SpriteRenderer sr = bg.AddComponent<SpriteRenderer>();
-        sr.sprite = bgSprite;
-        sr.sortingOrder = -100;
+        bg.transform.localScale = new Vector3(4.6f, 4.6f, 1f);
+        int[,] sky = { { 55, 56, 57, 58, 59 }, { 77, 78, 79, 80, 81 }, { 99, 100, 101, 102, 103 } };
+        for (int row = 0; row < 3; row++)
+            for (int col = 0; col < 5; col++)
+            {
+                GameObject tile = new GameObject("Sky");
+                tile.transform.SetParent(bg.transform, false);
+                tile.transform.localPosition = new Vector3(col - 2f, 1f - row, 0f);
+                SpriteRenderer sr = tile.AddComponent<SpriteRenderer>();
+                sr.sprite = Env(sky[row, col]);
+                sr.sortingOrder = -100;
+            }
     }
 
     static void BuildMusic()
@@ -269,49 +278,72 @@ public static class LevelBuilder
 
     static Transform level;
 
-    static GameObject Tiled(string name, Sprite sprite, Vector2 center, Vector2 size, int order = 0)
+    static GameObject Piece(string name, Sprite sprite, Vector2 position, Vector2 scale, int order = 0)
     {
         GameObject go = new GameObject(name);
         go.transform.SetParent(level, false);
-        go.transform.position = center;
+        go.transform.position = position;
+        go.transform.localScale = new Vector3(scale.x, scale.y, 1f);
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = sprite;
-        sr.drawMode = SpriteDrawMode.Tiled;
-        sr.size = size;
         sr.sortingOrder = order;
         return go;
     }
 
-    // Static ground from xStart to xEnd whose top surface is at topY.
+    static void AddTile(Transform parent, Sprite sprite, Vector2 position, int order = 0)
+    {
+        GameObject tile = new GameObject(sprite.name);
+        tile.transform.SetParent(parent, false);
+        tile.transform.position = position;
+        SpriteRenderer sr = tile.AddComponent<SpriteRenderer>();
+        sr.sprite = sprite;
+        sr.sortingOrder = order;
+    }
+
+    // Static grass ground from xStart to xEnd whose top surface is at topY, built from 1x1 Nature tiles.
     static void Ground(float xStart, float xEnd, float topY)
     {
-        GameObject go = Tiled("Ground", groundSprite, new Vector2((xStart + xEnd) / 2f, topY - 0.5f), new Vector2(xEnd - xStart, 1f));
+        GameObject go = new GameObject("Ground");
+        go.transform.SetParent(level, false);
+        go.transform.position = new Vector2((xStart + xEnd) / 2f, topY - 1f);
         go.layer = groundLayer;
-        go.AddComponent<BoxCollider2D>().size = new Vector2(xEnd - xStart, 1f);
+        go.AddComponent<BoxCollider2D>().size = new Vector2(xEnd - xStart, 2f);
+        int tiles = Mathf.RoundToInt(xEnd - xStart);
+        for (int i = 0; i < tiles; i++)
+        {
+            AddTile(go.transform, Env(i % 2 == 0 ? 22 : 23), new Vector2(xStart + i + 0.5f, topY - 0.5f));
+            AddTile(go.transform, Env(i % 2 == 0 ? 97 : 98), new Vector2(xStart + i + 0.5f, topY - 1.5f));
+        }
     }
 
     static void Spikes(float x, float topY, int width = 1)
     {
-        GameObject go = Tiled("Spikes (trap)", spikeSprite, new Vector2(x, topY + 0.25f), new Vector2(width, 0.5f), 1);
+        GameObject go = new GameObject("Spikes (trap)");
+        go.transform.SetParent(level, false);
+        go.transform.position = new Vector2(x, topY + 0.5f);
+        for (int i = 0; i < width; i++)
+            AddTile(go.transform, Env(113), new Vector2(x - (width - 1) / 2f + i, topY + 0.5f), 1);
         BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = new Vector2(width - 0.2f, 0.4f);
+        col.size = new Vector2(width - 0.2f, 0.35f);
+        col.offset = new Vector2(0f, -0.3f);
         go.AddComponent<trap>();
     }
 
+    // Pushable stone block.
     static void Crate(float x, float y)
     {
-        GameObject go = Tiled("Crate", crateSprite, new Vector2(x, y), Vector2.one);
+        GameObject go = Piece("Stone Block", Prop(15), new Vector2(x, y), new Vector2(1.1f, 1.5f));
         go.layer = groundLayer;
-        go.AddComponent<BoxCollider2D>().size = Vector2.one;
+        go.AddComponent<BoxCollider2D>();
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
         rb.mass = 1.5f;
     }
 
     static void Seesaw(float x, float y, float width)
     {
-        GameObject go = Tiled("Seesaw", plankSprite, new Vector2(x, y - 0.25f), new Vector2(width, 0.5f));
+        GameObject go = Piece("Seesaw", Prop(14), new Vector2(x, y - 0.17f), new Vector2(width, 1f));
         go.layer = groundLayer;
-        go.AddComponent<BoxCollider2D>().size = new Vector2(width, 0.5f);
+        go.AddComponent<BoxCollider2D>();
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
         rb.mass = 2f;
         rb.angularDamping = 0.5f;
@@ -319,20 +351,20 @@ public static class LevelBuilder
         hinge.useLimits = true;
         hinge.limits = new JointAngleLimits2D { min = -22f, max = 22f };
 
-        Tiled("Seesaw Post", whiteSprite, new Vector2(x, y - 2.5f), new Vector2(0.3f, 4f), -1).GetComponent<SpriteRenderer>().color = new Color(0.35f, 0.25f, 0.2f);
+        Piece("Seesaw Post", Prop(16), new Vector2(x, y - 2.5f), new Vector2(1f, 4f), -1);
     }
 
     static void FallingPlatform(float x, float topY, float width = 2.5f)
     {
-        GameObject go = Tiled("Falling Platform", plankSprite, new Vector2(x, topY - 0.25f), new Vector2(width, 0.5f));
+        GameObject go = Piece("Falling Platform", Prop(13), new Vector2(x, topY - 0.25f), new Vector2(width, 0.75f));
         go.layer = groundLayer;
-        go.GetComponent<SpriteRenderer>().color = new Color(1f, 0.75f, 0.6f);
-        go.AddComponent<BoxCollider2D>().size = new Vector2(width, 0.5f);
+        go.GetComponent<SpriteRenderer>().color = new Color(1f, 0.85f, 0.6f);
+        go.AddComponent<BoxCollider2D>();
         go.AddComponent<Rigidbody2D>();
         go.AddComponent<FallingPlatform>();
     }
 
-    // Swinging spiked ball hanging from a hinge. Ball bottom clears the floor by ~0.8 units.
+    // Swinging rock hanging from a hinge. Rock bottom clears the floor by ~0.8 units.
     static void Pendulum(float x, float floorY, float length, float startAngle)
     {
         Vector2 pivot = new Vector2(x, floorY + length + 1.3f);
@@ -353,21 +385,20 @@ public static class LevelBuilder
         GameObject rod = new GameObject("Rod");
         rod.transform.SetParent(root.transform, false);
         rod.transform.localPosition = new Vector3(0f, -length / 2f, 0f);
-        SpriteRenderer rodSr = rod.AddComponent<SpriteRenderer>();
-        rodSr.sprite = whiteSprite;
-        rodSr.drawMode = SpriteDrawMode.Tiled;
-        rodSr.size = new Vector2(0.12f, length);
-        rodSr.color = new Color(0.3f, 0.3f, 0.3f);
+        rod.transform.localScale = new Vector3(0.4f, length, 1f);
+        rod.AddComponent<SpriteRenderer>().sprite = Prop(16);
 
-        GameObject ball = new GameObject("Spike Ball (trap)");
+        GameObject ball = new GameObject("Swinging Rock (trap)");
         ball.transform.SetParent(root.transform, false);
         ball.transform.localPosition = new Vector3(0f, -length, 0f);
-        ball.AddComponent<SpriteRenderer>().sprite = ballSprite;
-        ball.GetComponent<SpriteRenderer>().sortingOrder = 2;
-        ball.AddComponent<CircleCollider2D>().radius = 0.45f;
+        ball.transform.localScale = new Vector3(1.4f, 1.4f, 1f);
+        SpriteRenderer ballSr = ball.AddComponent<SpriteRenderer>();
+        ballSr.sprite = Prop(23);
+        ballSr.sortingOrder = 2;
+        ball.AddComponent<CircleCollider2D>().radius = 0.32f;
         ball.AddComponent<trap>();
 
-        Tiled("Pendulum Mount", whiteSprite, pivot, new Vector2(0.5f, 0.3f), 1).GetComponent<SpriteRenderer>().color = Color.gray;
+        Piece("Pendulum Mount", Prop(8), pivot, Vector2.one, 1);
     }
 
     // Rope bridge of hinged planks between two anchor points at height y.
@@ -377,18 +408,19 @@ public static class LevelBuilder
         Rigidbody2D prev = null;
         for (int i = 0; i < planks; i++)
         {
-            GameObject go = Tiled("Bridge Plank", plankSprite, new Vector2(xStart + w * (i + 0.5f), y - 0.2f), new Vector2(w - 0.05f, 0.4f));
+            GameObject go = Piece("Bridge Plank", Prop(14), new Vector2(xStart + w * (i + 0.5f), y - 0.17f), new Vector2(w - 0.05f, 1f));
             go.layer = groundLayer;
-            go.AddComponent<BoxCollider2D>().size = new Vector2(w - 0.05f, 0.4f);
+            go.AddComponent<BoxCollider2D>();
             Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
             rb.mass = 0.6f;
+            // Joint anchors are in local space; the sprite is 1 unit wide before scaling.
             HingeJoint2D hinge = go.AddComponent<HingeJoint2D>();
-            hinge.anchor = new Vector2(-w / 2f, 0f);
+            hinge.anchor = new Vector2(-0.5f, 0f);
             hinge.connectedBody = prev; // null = attached to the world
             if (i == planks - 1)
             {
                 HingeJoint2D end = go.AddComponent<HingeJoint2D>();
-                end.anchor = new Vector2(w / 2f, 0f);
+                end.anchor = new Vector2(0.5f, 0f);
             }
             prev = rb;
         }
@@ -396,14 +428,18 @@ public static class LevelBuilder
 
     static void Finish(float x, float topY)
     {
-        GameObject flag = new GameObject("Finish Flag");
-        flag.transform.SetParent(level, false);
-        flag.transform.position = new Vector2(x, topY + 2f);
-        flag.AddComponent<SpriteRenderer>().sprite = flagSprite;
+        GameObject flag = Piece("Finish Sign", Prop(39), new Vector2(x, topY + 1.15f), new Vector2(2f, 2f));
         BoxCollider2D col = flag.AddComponent<BoxCollider2D>();
         col.isTrigger = true;
-        col.size = new Vector2(1.5f, 4f);
+        col.size = new Vector2(1f, 3f);
         flag.AddComponent<FinishLine>();
+    }
+
+    // Non-colliding scenery behind the player.
+    static void Decor(int prop, float x, float topY, float scale = 1.5f)
+    {
+        Sprite sp = Prop(prop);
+        Piece("Decor", sp, new Vector2(x, topY + sp.bounds.extents.y * scale), new Vector2(scale, scale), -5);
     }
 
     static void BuildCourse()
@@ -419,8 +455,17 @@ public static class LevelBuilder
 
         // Start line and a wall behind it.
         Ground(-6f, 14f, 0f);
-        GameObject wall = Tiled("Wall", groundSprite, new Vector2(-6.5f, 4f), new Vector2(1f, 9f));
+        GameObject wall = new GameObject("Wall");
+        wall.transform.SetParent(level, false);
+        wall.transform.position = new Vector2(-6.5f, 4f);
         wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 9f);
+        for (int i = 0; i < 9; i++) AddTile(wall.transform, Env(83), new Vector2(-6.5f, i));
+
+        // Scenery.
+        Decor(27, -3f, 0f); Decor(10, 2f, 0f); Decor(1, 11f, 0f);
+        Decor(19, 21f, 0f); Decor(28, 48f, 1f); Decor(11, 82f, 1.5f); Decor(29, 94f, 4f);
+        Decor(21, 125f, 4f); Decor(0, 151f, 4f); Decor(17, 182f, 3f); Decor(27, 212f, 6f);
+        Decor(22, 237f, 6f); Decor(28, 288f, 5f); Decor(10, 292f, 5f);
         Crate(6f, 0.5f); Crate(7.1f, 0.5f); Crate(6.55f, 1.5f);
 
         // Section 1: gaps and first spikes.
