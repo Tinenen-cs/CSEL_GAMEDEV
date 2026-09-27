@@ -6,6 +6,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
+using UnityEngine.Tilemaps;
 
 // Builds the whole platformer level (player, animations, obstacles, camera, music).
 // Runs automatically once if Assets/Scenes/Level1.unity does not exist, or via Tools > Build Platformer Level.
@@ -19,7 +20,7 @@ public static class LevelBuilder
     const string AnimFolder = "Assets/Animations/";
     const string NatureScenePath = "Assets/Nature_pixel_art_assets/Scenes/Nature_assets.unity";
 
-    static int groundLayer;
+    static int groundLayer, hazardLayer;
     static Sprite[] envSprites, propSprites;
     static PhysicsMaterial2D noFriction;
 
@@ -36,6 +37,8 @@ public static class LevelBuilder
             AssetDatabase.DeleteAsset(old);
         SetInputHandlerToBoth();
         groundLayer = EnsureLayer("Ground");
+        hazardLayer = EnsureLayer("Hazard");
+        Physics2D.IgnoreLayerCollision(hazardLayer, groundLayer, true); // swinging rocks pass through scenery
         ImportSprites();
         RuntimeAnimatorController controller = BuildAnimator();
 
@@ -45,10 +48,10 @@ public static class LevelBuilder
         Light2D light = lightGo.AddComponent<Light2D>();
         light.lightType = Light2D.LightType.Global;
 
-        GameObject player = BuildPlayer(controller, new Vector2(-2f, 1.5f));
+        Vector2 spawn = BuildCourse();
+        GameObject player = BuildPlayer(controller, spawn);
         BuildCamera(player);
         BuildMusic();
-        BuildCourse();
 
         EditorSceneManager.SaveScene(scene, ScenePath);
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
@@ -110,7 +113,7 @@ public static class LevelBuilder
     {
         foreach (string dir in new[] { "IDLE", "RUN", "JUMP" })
             foreach (string file in Directory.GetFiles(PlayerSprites + dir, "*.png"))
-                ImportSprite(file.Replace('\\', '/'), 128f, false);
+                ImportSprite(file.Replace('\\', '/'), 224f, false);
 
         envSprites = AssetDatabase.LoadAllAssetsAtPath(EnvSheet).OfType<Sprite>().ToArray();
         propSprites = AssetDatabase.LoadAllAssetsAtPath(PropSheet).OfType<Sprite>().ToArray();
@@ -198,20 +201,20 @@ public static class LevelBuilder
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
         CapsuleCollider2D col = player.AddComponent<CapsuleCollider2D>();
-        col.size = new Vector2(0.9f, 1.55f);
-        col.offset = new Vector2(0f, 0.07f);
+        col.size = new Vector2(0.5f, 0.88f);
+        col.offset = new Vector2(0f, 0.04f);
         col.sharedMaterial = noFriction;
 
         Transform groundCheck = new GameObject("GroundCheck").transform;
         groundCheck.SetParent(player.transform, false);
-        groundCheck.localPosition = new Vector3(0f, -0.72f, 0f);
+        groundCheck.localPosition = new Vector3(0f, -0.41f, 0f);
         Transform ceilingCheck = new GameObject("CeilingCheck").transform;
         ceilingCheck.SetParent(player.transform, false);
-        ceilingCheck.localPosition = new Vector3(0f, 0.85f, 0f);
+        ceilingCheck.localPosition = new Vector3(0f, 0.49f, 0f);
 
         CharacterController2D cc = player.AddComponent<CharacterController2D>();
         SerializedObject so = new SerializedObject(cc);
-        so.FindProperty("m_JumpForce").floatValue = 650f;
+        so.FindProperty("m_JumpForce").floatValue = 540f;
         so.FindProperty("m_AirControl").boolValue = true;
         so.FindProperty("m_WhatIsGround").intValue = 1 << groundLayer;
         so.FindProperty("m_GroundCheck").objectReferenceValue = groundCheck;
@@ -224,7 +227,7 @@ public static class LevelBuilder
         playermovement pm = player.AddComponent<playermovement>();
         pm.anime = animator;
         pm.controller = cc;
-        pm.runSpeed = 40f;
+        pm.runSpeed = 25f;
 
         return player;
     }
@@ -236,56 +239,43 @@ public static class LevelBuilder
         camGo.transform.position = new Vector3(player.transform.position.x, player.transform.position.y + 1f, -10f);
         Camera cam = camGo.AddComponent<Camera>();
         cam.orthographic = true;
-        cam.orthographicSize = 6f;
+        cam.orthographicSize = cameraSize;
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(0.55f, 0.78f, 0.95f);
         camGo.AddComponent<AudioListener>();
 
         CameraFollow follow = camGo.AddComponent<CameraFollow>();
         follow.followObject = player;
-        follow.followOffset = new Vector2(8.5f, 4.5f);
+        follow.followOffset = new Vector2(cameraSize * 16f / 9f - 1.5f, cameraSize - 1f);
         follow.speed = 3f;
 
-        BuildSceneBackground(cam);
+        BuildSky(cam);
     }
 
-    // Copies the Nature pack's demo scene (sky, ground, trees, props) in as a backdrop that follows the camera.
-    // Colliders are stripped so it is scenery only; the playable course is built separately in front of it.
-    static void BuildSceneBackground(Camera cam)
+    // The Sky layer of the Nature_assets scene, pinned behind the camera so it covers the whole course.
+    static void BuildSky(Camera cam)
     {
-        Scene natureScene = EditorSceneManager.OpenScene(NatureScenePath, OpenSceneMode.Additive);
-        GameObject bg = new GameObject("Background (Nature_assets scene)");
-        foreach (GameObject root in natureScene.GetRootGameObjects())
-        {
-            if (root.GetComponentInChildren<Camera>(true) != null) continue;
-            GameObject copy = Object.Instantiate(root);
-            copy.name = root.name;
-            SceneManager.MoveGameObjectToScene(copy, bg.scene);
-            copy.transform.SetParent(bg.transform, true);
-        }
-        EditorSceneManager.CloseScene(natureScene, true);
+        Scene nature = EditorSceneManager.OpenScene(NatureScenePath, OpenSceneMode.Additive);
+        GameObject sourceGrid = nature.GetRootGameObjects().First(g => g.GetComponent<Grid>() != null);
+        GameObject grid = Object.Instantiate(sourceGrid);
+        grid.name = "Sky (Nature_assets scene)";
+        SceneManager.MoveGameObjectToScene(grid, cam.gameObject.scene);
+        EditorSceneManager.CloseScene(nature, true);
 
-        foreach (var joint in bg.GetComponentsInChildren<Joint2D>(true)) Object.DestroyImmediate(joint);
-        foreach (var comp in bg.GetComponentsInChildren<CompositeCollider2D>(true)) Object.DestroyImmediate(comp);
-        foreach (var col in bg.GetComponentsInChildren<Collider2D>(true)) Object.DestroyImmediate(col);
-        foreach (var body in bg.GetComponentsInChildren<Rigidbody2D>(true)) Object.DestroyImmediate(body);
-        foreach (var src in bg.GetComponentsInChildren<AudioSource>(true)) Object.DestroyImmediate(src);
+        foreach (Transform child in grid.transform.Cast<Transform>().ToArray())
+            if (child.name != "Sky") Object.DestroyImmediate(child.gameObject);
 
-        Renderer[] renderers = bg.GetComponentsInChildren<Renderer>(true);
-        Bounds bounds = renderers[0].bounds;
-        foreach (Renderer r in renderers)
-        {
-            bounds.Encapsulate(r.bounds);
-            r.sortingOrder -= 100;
-        }
+        Tilemap sky = grid.GetComponentInChildren<Tilemap>();
+        sky.CompressBounds();
+        Bounds bounds = sky.localBounds;
+        sky.GetComponent<TilemapRenderer>().sortingOrder = -100;
 
-        // Scale the whole scene so it covers the camera view, then pin it behind the camera.
         float viewH = cam.orthographicSize * 2f;
         float viewW = viewH * 16f / 9f;
-        float scale = Mathf.Max(viewW / bounds.size.x, viewH / bounds.size.y) * 1.05f;
-        bg.transform.localScale = new Vector3(scale, scale, 1f);
-        bg.transform.SetParent(cam.transform, false);
-        bg.transform.localPosition = new Vector3(-bounds.center.x * scale, -bounds.center.y * scale, 20f);
+        float scale = Mathf.Max(viewW / bounds.size.x, viewH / bounds.size.y) * 1.1f;
+        grid.transform.SetParent(cam.transform, false);
+        grid.transform.localScale = new Vector3(scale, scale, 1f);
+        grid.transform.localPosition = new Vector3(-bounds.center.x * scale, -bounds.center.y * scale, 20f);
     }
 
     static void BuildMusic()
@@ -325,43 +315,36 @@ public static class LevelBuilder
         sr.sortingOrder = order;
     }
 
-    // Static grass ground from xStart to xEnd whose top surface is at topY, built from 1x1 Nature tiles.
-    static void Ground(float xStart, float xEnd, float topY)
-    {
-        GameObject go = new GameObject("Ground");
-        go.transform.SetParent(level, false);
-        go.transform.position = new Vector2((xStart + xEnd) / 2f, topY - 1f);
-        go.layer = groundLayer;
-        go.AddComponent<BoxCollider2D>().size = new Vector2(xEnd - xStart, 2f);
-        int tiles = Mathf.RoundToInt(xEnd - xStart);
-        for (int i = 0; i < tiles; i++)
-        {
-            AddTile(go.transform, Env(i % 2 == 0 ? 22 : 23), new Vector2(xStart + i + 0.5f, topY - 0.5f));
-            AddTile(go.transform, Env(i % 2 == 0 ? 97 : 98), new Vector2(xStart + i + 0.5f, topY - 1.5f));
-        }
-    }
-
-    static void Spikes(float x, float topY, int width = 1)
+    static void Spikes(float x, float topY)
     {
         GameObject go = new GameObject("Spikes (trap)");
         go.transform.SetParent(level, false);
         go.transform.position = new Vector2(x, topY + 0.5f);
-        for (int i = 0; i < width; i++)
-            AddTile(go.transform, Env(113), new Vector2(x - (width - 1) / 2f + i, topY + 0.5f), 1);
+        AddTile(go.transform, Env(113), go.transform.position, 1);
         BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = new Vector2(width - 0.2f, 0.35f);
+        col.size = new Vector2(0.8f, 0.35f);
         col.offset = new Vector2(0f, -0.3f);
         go.AddComponent<trap>();
     }
 
-    // Pushable stone block.
-    static void Crate(float x, float y)
+    // Invisible trap collider over spike tiles that are already painted in the Nature scene.
+    static void SpikeTrap(float xStart, float xEnd, float topY)
     {
-        GameObject go = Piece("Stone Block", Prop(15), new Vector2(x, y), new Vector2(1.1f, 1.5f));
+        GameObject go = new GameObject("Scene Spikes (trap)");
+        go.transform.SetParent(level, false);
+        go.transform.position = new Vector2((xStart + xEnd) / 2f, topY + 0.2f);
+        go.AddComponent<BoxCollider2D>().size = new Vector2(xEnd - xStart - 0.2f, 0.4f);
+        go.AddComponent<trap>();
+    }
+
+    // Pushable stone block.
+    static void Crate(float x, float floorY)
+    {
+        GameObject go = Piece("Stone Block", Prop(15), new Vector2(x, floorY + 0.34f), new Vector2(0.7f, 1f));
         go.layer = groundLayer;
         go.AddComponent<BoxCollider2D>();
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
-        rb.mass = 1.5f;
+        rb.mass = 1f;
     }
 
     static void Seesaw(float x, float y, float width)
@@ -370,16 +353,16 @@ public static class LevelBuilder
         go.layer = groundLayer;
         go.AddComponent<BoxCollider2D>();
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
-        rb.mass = 2f;
+        rb.mass = 1f;
         rb.angularDamping = 0.5f;
         HingeJoint2D hinge = go.AddComponent<HingeJoint2D>();
         hinge.useLimits = true;
-        hinge.limits = new JointAngleLimits2D { min = -22f, max = 22f };
+        hinge.limits = new JointAngleLimits2D { min = -20f, max = 20f };
 
-        Piece("Seesaw Post", Prop(16), new Vector2(x, y - 2.5f), new Vector2(1f, 4f), -1);
+        Piece("Seesaw Post", Prop(16), new Vector2(x, y - 1.6f), new Vector2(0.6f, 2.6f), -1);
     }
 
-    static void FallingPlatform(float x, float topY, float width = 2.5f)
+    static void FallingPlatform(float x, float topY, float width = 1.5f)
     {
         GameObject go = Piece("Falling Platform", Prop(13), new Vector2(x, topY - 0.25f), new Vector2(width, 0.75f));
         go.layer = groundLayer;
@@ -389,18 +372,20 @@ public static class LevelBuilder
         go.AddComponent<FallingPlatform>();
     }
 
-    // Swinging rock hanging from a hinge. Rock bottom clears the floor by ~0.8 units.
-    static void Pendulum(float x, float floorY, float length, float startAngle)
+    // Swinging rock on a hinge. The rock skims the floor at player height.
+    static void Pendulum(float x, float floorY, float startAngle)
     {
-        Vector2 pivot = new Vector2(x, floorY + length + 1.3f);
+        const float length = 1.6f;
+        Vector2 pivot = new Vector2(x, floorY + length + 0.75f);
         GameObject root = new GameObject("Pendulum");
         root.transform.SetParent(level, false);
         root.transform.position = pivot;
         root.transform.rotation = Quaternion.Euler(0f, 0f, startAngle);
+        root.layer = hazardLayer;
 
         Rigidbody2D rb = root.AddComponent<Rigidbody2D>();
         rb.useAutoMass = false;
-        rb.mass = 5f;
+        rb.mass = 3f;
         rb.linearDamping = 0f;
         rb.angularDamping = 0f;
         HingeJoint2D hinge = root.AddComponent<HingeJoint2D>();
@@ -410,20 +395,20 @@ public static class LevelBuilder
         GameObject rod = new GameObject("Rod");
         rod.transform.SetParent(root.transform, false);
         rod.transform.localPosition = new Vector3(0f, -length / 2f, 0f);
-        rod.transform.localScale = new Vector3(0.4f, length, 1f);
+        rod.transform.localScale = new Vector3(0.3f, length, 1f);
         rod.AddComponent<SpriteRenderer>().sprite = Prop(16);
 
         GameObject ball = new GameObject("Swinging Rock (trap)");
         ball.transform.SetParent(root.transform, false);
         ball.transform.localPosition = new Vector3(0f, -length, 0f);
-        ball.transform.localScale = new Vector3(1.4f, 1.4f, 1f);
+        ball.layer = hazardLayer;
         SpriteRenderer ballSr = ball.AddComponent<SpriteRenderer>();
         ballSr.sprite = Prop(23);
-        ballSr.sortingOrder = 2;
-        ball.AddComponent<CircleCollider2D>().radius = 0.32f;
+        ballSr.sortingOrder = 6;
+        ball.AddComponent<CircleCollider2D>().radius = 0.3f;
         ball.AddComponent<trap>();
 
-        Piece("Pendulum Mount", Prop(8), pivot, Vector2.one, 1);
+        Piece("Pendulum Mount", Prop(8), pivot, new Vector2(0.6f, 0.6f), 6);
     }
 
     // Rope bridge of hinged planks between two anchor points at height y.
@@ -437,7 +422,7 @@ public static class LevelBuilder
             go.layer = groundLayer;
             go.AddComponent<BoxCollider2D>();
             Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
-            rb.mass = 0.6f;
+            rb.mass = 0.4f;
             // Joint anchors are in local space; the sprite is 1 unit wide before scaling.
             HingeJoint2D hinge = go.AddComponent<HingeJoint2D>();
             hinge.anchor = new Vector2(-0.5f, 0f);
@@ -453,107 +438,118 @@ public static class LevelBuilder
 
     static void Finish(float x, float topY)
     {
-        GameObject flag = Piece("Finish Sign", Prop(39), new Vector2(x, topY + 1.15f), new Vector2(2f, 2f));
+        GameObject flag = Piece("Finish Sign", Prop(39), new Vector2(x, topY + 0.58f), Vector2.one, 5);
         BoxCollider2D col = flag.AddComponent<BoxCollider2D>();
         col.isTrigger = true;
-        col.size = new Vector2(1f, 3f);
+        col.size = new Vector2(1f, 2f);
         flag.AddComponent<FinishLine>();
     }
 
-    // Non-colliding scenery behind the player.
-    static void Decor(int prop, float x, float topY, float scale = 1.5f)
-    {
-        Sprite sp = Prop(prop);
-        Piece("Decor", sp, new Vector2(x, topY + sp.bounds.extents.y * scale), new Vector2(scale, scale), -5);
-    }
+    static float cameraSize = 3f;
+    const int Islands = 10;
+    const float GapWidth = 4f;
 
-    static void BuildCourse()
+    // Layout of the Nature_assets scene in its own coordinates (1 tile = 1 unit):
+    //   x -9..-8 cliff top y=1 (start), -8..-6 ledge y=0 over a cave, -6..-3 floor y=-1,
+    //   -3..2 slope up to y=0, 2..9 cave floor y=-1 (spike tiles at x 7..9), 9..15 ground y=0,
+    //   15..20 cave floor y=-1, 20..24 slope up to y=0 and a wall at x 23..24 (removed on each copy).
+    const float SceneLeft = -9f, SceneRight = 24f;
+
+    // The course is the Nature_assets scene repeated as islands, with physics obstacles
+    // on each island and in the gaps between them.
+    static Vector2 BuildCourse()
     {
         level = new GameObject("Level").transform;
+        Material spriteMaterial = AssetDatabase.LoadAssetAtPath<Material>("Packages/com.unity.render-pipelines.universal/Runtime/Materials/Sprite-Lit-Default.mat");
+
+        Scene nature = EditorSceneManager.OpenScene(NatureScenePath, OpenSceneMode.Additive);
+        GameObject sourceGrid = nature.GetRootGameObjects().First(g => g.GetComponent<Grid>() != null);
+        GameObject sourceProps = nature.GetRootGameObjects().FirstOrDefault(g => g.name == "Props");
+        Camera natureCam = nature.GetRootGameObjects().Select(g => g.GetComponentInChildren<Camera>()).FirstOrDefault(c => c != null);
+        if (natureCam != null) cameraSize = natureCam.orthographicSize;
+
+        float step = SceneRight - SceneLeft + GapWidth;
+        for (int k = 0; k < Islands; k++)
+        {
+            float ox = k * step;
+            Vector3 offset = new Vector3(ox, 0f, 0f);
+
+            GameObject grid = Object.Instantiate(sourceGrid);
+            grid.name = "Nature_assets Island " + (k + 1);
+            SceneManager.MoveGameObjectToScene(grid, level.gameObject.scene);
+            grid.transform.SetParent(level, false);
+            grid.transform.position = sourceGrid.transform.position + offset;
+            foreach (Tilemap tilemap in grid.GetComponentsInChildren<Tilemap>())
+            {
+                if (tilemap.name == "Sky") continue;
+                // Open the right-hand wall so the player can leave the island.
+                if (k < Islands - 1)
+                    for (int y = 0; y <= 2; y++) tilemap.SetTile(new Vector3Int(23, y, 0), null);
+                tilemap.gameObject.layer = groundLayer;
+                Rigidbody2D body = tilemap.gameObject.AddComponent<Rigidbody2D>();
+                body.bodyType = RigidbodyType2D.Static;
+                TilemapCollider2D tileCollider = tilemap.gameObject.AddComponent<TilemapCollider2D>();
+                tileCollider.compositeOperation = Collider2D.CompositeOperation.Merge;
+                tilemap.gameObject.AddComponent<CompositeCollider2D>();
+            }
+
+            if (sourceProps != null)
+            {
+                GameObject props = Object.Instantiate(sourceProps);
+                props.name = "Props " + (k + 1);
+                SceneManager.MoveGameObjectToScene(props, level.gameObject.scene);
+                props.transform.SetParent(level, false);
+                props.transform.position = sourceProps.transform.position + offset;
+                foreach (var col in props.GetComponentsInChildren<Collider2D>(true)) Object.DestroyImmediate(col);
+                foreach (var sr in props.GetComponentsInChildren<SpriteRenderer>(true))
+                    if (sr.sharedMaterial == null && spriteMaterial != null) sr.sharedMaterial = spriteMaterial;
+            }
+
+            // Obstacles on the island.
+            SpikeTrap(ox + 7f, ox + 9f, -1f);
+            if (k % 2 == 0) { Crate(ox - 5f, -1f); Crate(ox - 4.2f, -1f); }
+            if (k % 2 == 1) Pendulum(ox + 11.5f, 0f, k % 4 == 1 ? 65f : -65f);
+            if (k >= 1) Spikes(ox + 17.5f, -1f);
+            if (k >= 3) Pendulum(ox + 0.5f, 0f, k % 2 == 0 ? 60f : -60f);
+            if (k >= 5) Spikes(ox + 4.5f, -1f);
+
+            // Gap to the next island, crossed on a physics obstacle.
+            if (k < Islands - 1)
+            {
+                float gapStart = ox + SceneRight;
+                float gapEnd = gapStart + GapWidth;
+                switch (k % 3)
+                {
+                    case 0:
+                        FallingPlatform(gapStart + GapWidth / 2f, 0f);
+                        break;
+                    case 1:
+                        Seesaw(gapStart + GapWidth / 2f, 0f, GapWidth - 0.8f);
+                        break;
+                    default:
+                        Bridge(gapStart, gapEnd, 0f, 4);
+                        break;
+                }
+            }
+        }
+        EditorSceneManager.CloseScene(nature, true);
+
+        // Invisible wall behind the start line.
+        GameObject wall = new GameObject("Start Wall");
+        wall.transform.SetParent(level, false);
+        wall.transform.position = new Vector2(SceneLeft - 0.5f, 5f);
+        wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 20f);
 
         // Fall zone: trap.cs reloads the scene, putting the player back at the start line.
+        float courseEnd = (Islands - 1) * step + SceneRight;
         GameObject fall = new GameObject("Fall Zone (trap)");
         fall.transform.SetParent(level, false);
-        fall.transform.position = new Vector2(150f, -15f);
-        fall.AddComponent<BoxCollider2D>().size = new Vector2(400f, 4f);
+        fall.transform.position = new Vector2((SceneLeft + courseEnd) / 2f, -9f);
+        fall.AddComponent<BoxCollider2D>().size = new Vector2(courseEnd - SceneLeft + 40f, 4f);
         fall.AddComponent<trap>();
 
-        // Start line and a wall behind it.
-        Ground(-6f, 14f, 0f);
-        GameObject wall = new GameObject("Wall");
-        wall.transform.SetParent(level, false);
-        wall.transform.position = new Vector2(-6.5f, 4f);
-        wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 9f);
-        for (int i = 0; i < 9; i++) AddTile(wall.transform, Env(83), new Vector2(-6.5f, i));
+        Finish((Islands - 1) * step + 22.4f, 0f);
 
-        // Scenery.
-        Decor(27, -3f, 0f); Decor(10, 2f, 0f); Decor(1, 11f, 0f);
-        Decor(19, 21f, 0f); Decor(28, 48f, 1f); Decor(11, 82f, 1.5f); Decor(29, 94f, 4f);
-        Decor(21, 125f, 4f); Decor(0, 151f, 4f); Decor(17, 182f, 3f); Decor(27, 212f, 6f);
-        Decor(22, 237f, 6f); Decor(28, 288f, 5f); Decor(10, 292f, 5f);
-        Crate(6f, 0.5f); Crate(7.1f, 0.5f); Crate(6.55f, 1.5f);
-
-        // Section 1: gaps and first spikes.
-        Ground(18f, 24f, 0f);
-        Ground(27f, 33f, 1.5f);
-        Spikes(30f, 1.5f);
-
-        // Section 2: seesaw, then a pendulum.
-        Seesaw(39f, 1.5f, 7f);
-        Ground(45f, 57f, 1f);
-        Pendulum(51f, 1f, 4f, 70f);
-
-        // Section 3: falling platforms.
-        FallingPlatform(61f, 1f);
-        FallingPlatform(65.5f, 2f);
-        FallingPlatform(70f, 1f);
-        FallingPlatform(74.5f, 2f);
-
-        // Section 4: crates to climb, rope bridge.
-        Ground(79f, 90f, 1.5f);
-        Crate(84f, 2f); Crate(85.1f, 2f); Crate(84.55f, 3f);
-        Ground(91f, 97f, 4f);
-        Bridge(97f, 115f, 4f, 9);
-
-        // Section 5: spikes and pendulum, double seesaw.
-        Ground(115f, 127f, 4f);
-        Spikes(118.5f, 4f);
-        Pendulum(123f, 4f, 4f, -70f);
-        Seesaw(133f, 4f, 7f);
-        Seesaw(142f, 4f, 7f);
-        Ground(149f, 153f, 4f);
-
-        // Section 6: long falling platform run.
-        FallingPlatform(157f, 4.5f);
-        FallingPlatform(161.5f, 5.5f);
-        FallingPlatform(166f, 4.5f);
-        FallingPlatform(170.5f, 3.5f);
-        FallingPlatform(175f, 4.5f);
-
-        // Section 7: stairs with spikes.
-        Ground(179f, 185f, 3f);
-        Ground(188f, 192f, 4.5f);
-        Ground(195f, 199f, 6f);
-        Spikes(197f, 6f);
-        Ground(202f, 206f, 7.5f);
-
-        // Section 8: pendulum gauntlet.
-        Ground(210f, 240f, 6f);
-        Pendulum(216f, 6f, 4f, 70f);
-        Pendulum(224f, 6f, 4f, -60f);
-        Spikes(228f, 6f);
-        Pendulum(233f, 6f, 4f, 50f);
-
-        // Section 9: bridge and final falling platforms.
-        Bridge(240f, 258f, 6f, 9);
-        Ground(258f, 262f, 6f);
-        FallingPlatform(266f, 6f);
-        FallingPlatform(270.5f, 7f);
-        FallingPlatform(275f, 6f);
-        FallingPlatform(279.5f, 5f);
-
-        // Finish line.
-        Ground(284f, 300f, 5f);
-        Finish(296f, 5f);
+        return new Vector2(SceneLeft + 0.6f, 1.6f);
     }
 }
