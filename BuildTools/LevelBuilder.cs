@@ -52,7 +52,6 @@ public static class LevelBuilder
         GameObject player = BuildPlayer(controller, spawn);
         BuildCamera(player);
         BuildMusic();
-        BuildDeathSound();
 
         EditorSceneManager.SaveScene(scene, ScenePath);
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
@@ -250,34 +249,16 @@ public static class LevelBuilder
         follow.followOffset = new Vector2(cameraSize * 16f / 9f - 1.5f, 0f); // y offset 0: stay at the scene framing
         follow.speed = 3f;
 
-        CameraGroundLock groundLock = camGo.AddComponent<CameraGroundLock>();
-        groundLock.player = player.transform;
-        groundLock.groundCheck = player.transform.Find("GroundCheck");
-        groundLock.whatIsGround = 1 << groundLayer;
-        groundLock.clampUntilX = SceneRight;
-
-    }
-
-    static void BuildDeathSound()
-    {
-        GameObject sfx = new GameObject("Death Sound");
-        AudioSource source = sfx.AddComponent<AudioSource>();
-        source.clip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/DeathSFX.mp3");
-        source.playOnAwake = false;
-        source.loop = false;
-        source.volume = 0.9f;
-        sfx.AddComponent<DeathSound>();
     }
 
     static void BuildMusic()
     {
         GameObject music = new GameObject("Background Music");
         AudioSource source = music.AddComponent<AudioSource>();
-        source.clip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/BGM.mp3");
+        source.clip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Music.mp3");
         source.loop = true;
         source.playOnAwake = true;
         source.volume = 0.6f;
-        music.AddComponent<MusicPlayer>();
     }
 
     // ---------- level pieces ----------
@@ -373,8 +354,12 @@ public static class LevelBuilder
         go.layer = groundLayer;
         go.GetComponent<SpriteRenderer>().color = new Color(1f, 0.85f, 0.6f);
         go.AddComponent<BoxCollider2D>();
-        go.AddComponent<Rigidbody2D>();
-        go.AddComponent<FallingPlatform>();
+        Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
+        rb.mass = 1f;
+        rb.gravityScale = 0.5f; // falls slowly once released, giving time to jump off
+        FixedJoint2D hold = go.AddComponent<FixedJoint2D>(); // attached to the world
+        hold.breakForce = 25f; // its own weight is ~5 N; the player's landing breaks it
+        hold.breakAction = JointBreakAction2D.Destroy;
     }
 
     // Swinging rock on a hinge. The rock skims the floor at player height.
@@ -394,7 +379,6 @@ public static class LevelBuilder
         rb.angularDamping = 0f;
         HingeJoint2D hinge = root.AddComponent<HingeJoint2D>();
         hinge.anchor = Vector2.zero;
-        root.AddComponent<Pendulum>();
 
         GameObject rod = new GameObject("Rod");
         rod.transform.SetParent(root.transform, false);
@@ -443,10 +427,6 @@ public static class LevelBuilder
     static void Finish(float x, float topY)
     {
         GameObject flag = Piece("Finish Sign", Prop(39), new Vector2(x, topY + 0.58f), Vector2.one, 5);
-        BoxCollider2D col = flag.AddComponent<BoxCollider2D>();
-        col.isTrigger = true;
-        col.size = new Vector2(1f, 2f);
-        flag.AddComponent<FinishLine>();
     }
 
     static float cameraSize = 3f;
@@ -509,9 +489,25 @@ public static class LevelBuilder
                 }
                 if (tilemap.name == "Ground")
                 {
-                    // Remove the first cave ceiling (x 2..9) so that stretch is open sky.
-                    for (int x = 2; x <= 8; x++)
+                    // Remove both cave ceilings so the whole first section is open sky.
+                    for (int x = 2; x <= 22; x++)
                         for (int y = 1; y <= 2; y++) tilemap.SetTile(new Vector3Int(x, y, 0), null);
+                    // Tall cliff behind the start line (x -13..-10, top at y=4), matching the end of the course.
+                    Matrix4x4 flip = Matrix4x4.Scale(new Vector3(-1f, 1f, 1f));
+                    for (int x = -13; x <= -10; x++)
+                    {
+                        Vector3Int top = new Vector3Int(x, 3, 0);
+                        tilemap.SetTile(top, x == -13 || x == -10 ? cliffTop : NatureTile(23));
+                        if (x == -10) tilemap.SetTransformMatrix(top, flip);
+                        for (int y = 2; y >= -14; y--)
+                        {
+                            Vector3Int cell = new Vector3Int(x, y, 0);
+                            bool leftFace = x == -13;
+                            bool rightFace = x == -10 && y >= 1;
+                            tilemap.SetTile(cell, leftFace || rightFace ? cliffWall : earth);
+                            if (rightFace) tilemap.SetTransformMatrix(cell, flip);
+                        }
+                    }
                     // Earth below the island so it reads as solid ground, not a cut-out strip.
                     for (int x = -9; x <= 23; x++)
                         for (int y = -3; y >= -14; y--) tilemap.SetTile(new Vector3Int(x, y, 0), earth);
@@ -568,8 +564,8 @@ public static class LevelBuilder
         // Invisible wall behind the start line.
         GameObject wall = new GameObject("Start Wall");
         wall.transform.SetParent(level, false);
-        wall.transform.position = new Vector2(SceneLeft - 0.5f, 5f);
-        wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 20f);
+        wall.transform.position = new Vector2(SceneLeft - 4.5f, 10f);
+        wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 30f);
 
         // Fall zone: trap.cs reloads the scene, putting the player back at the start line.
         GameObject fall = new GameObject("Fall Zone (trap)");
