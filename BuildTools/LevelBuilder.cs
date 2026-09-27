@@ -311,15 +311,15 @@ public static class LevelBuilder
         go.AddComponent<trap>();
     }
 
-    // Heavy rock that rolls down slopes; touching it kills the player.
+    // Heavy rock that rolls down slopes and can be pushed around (not deadly).
     static void Boulder(float x, float y)
     {
-        GameObject go = Piece("Rolling Boulder (trap)", Prop(25), new Vector2(x, y), new Vector2(1.2f, 1.2f), 5);
+        GameObject go = Piece("Rolling Boulder", Prop(25), new Vector2(x, y), new Vector2(1.2f, 1.2f), 5);
         go.AddComponent<CircleCollider2D>().radius = 0.28f;
         Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
         rb.mass = 4f;
         rb.angularDamping = 0.2f;
-        go.AddComponent<trap>();
+        go.layer = groundLayer; // the player can stand on it
     }
 
     // Pushable stone block.
@@ -696,7 +696,7 @@ public static class LevelBuilder
             }
         }
 
-        foreach (Tilemap tm in new[] { ground, platforms }) MakeSolid(tm);
+        MakeSolid(ground);
 
         System.Func<int, float> X = c => ox + SceneLeft + c + 0.5f;
         System.Func<int, float> Top = c => Height(terrain, c);
@@ -779,6 +779,8 @@ public static class LevelBuilder
                 break;
         }
 
+        MakeSolid(platforms); // after the floating platforms are painted, so they get colliders
+
         // Scenery from the section's theme, only on flat ground away from obstacles.
         int[] theme = Themes[(k - 1) % Themes.Length];
         for (int c = 2; c < terrain.Length - 2; c += 2 + rng.Next(2))
@@ -811,7 +813,9 @@ public static class LevelBuilder
         body.bodyType = RigidbodyType2D.Static;
         TilemapCollider2D tileCollider = tilemap.gameObject.AddComponent<TilemapCollider2D>();
         tileCollider.compositeOperation = Collider2D.CompositeOperation.Merge;
-        tilemap.gameObject.AddComponent<CompositeCollider2D>();
+        CompositeCollider2D composite = tilemap.gameObject.AddComponent<CompositeCollider2D>();
+        tileCollider.ProcessTilemapChanges();
+        composite.GenerateGeometry();
     }
 
     // Non-colliding decoration standing on the ground.
