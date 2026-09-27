@@ -17,6 +17,7 @@ public static class LevelBuilder
     const string EnvSheet = "Assets/Nature_pixel_art_assets/textures/nature_environment_01.png";
     const string PropSheet = "Assets/Nature_pixel_art_assets/textures/Nature_props_01.png";
     const string AnimFolder = "Assets/Animations/";
+    const string NatureScenePath = "Assets/Nature_pixel_art_assets/Scenes/Nature_assets.unity";
 
     static int groundLayer;
     static Sprite[] envSprites, propSprites;
@@ -245,22 +246,46 @@ public static class LevelBuilder
         follow.followOffset = new Vector2(8.5f, 4.5f);
         follow.speed = 3f;
 
-        // Background stage (sky tiles from the Nature pack) follows the camera.
-        GameObject bg = new GameObject("Background");
-        bg.transform.SetParent(camGo.transform, false);
-        bg.transform.localPosition = new Vector3(0f, 0f, 20f);
-        bg.transform.localScale = new Vector3(4.6f, 4.6f, 1f);
-        int[,] sky = { { 55, 56, 57, 58, 59 }, { 77, 78, 79, 80, 81 }, { 99, 100, 101, 102, 103 } };
-        for (int row = 0; row < 3; row++)
-            for (int col = 0; col < 5; col++)
-            {
-                GameObject tile = new GameObject("Sky");
-                tile.transform.SetParent(bg.transform, false);
-                tile.transform.localPosition = new Vector3(col - 2f, 1f - row, 0f);
-                SpriteRenderer sr = tile.AddComponent<SpriteRenderer>();
-                sr.sprite = Env(sky[row, col]);
-                sr.sortingOrder = -100;
-            }
+        BuildSceneBackground(cam);
+    }
+
+    // Copies the Nature pack's demo scene (sky, ground, trees, props) in as a backdrop that follows the camera.
+    // Colliders are stripped so it is scenery only; the playable course is built separately in front of it.
+    static void BuildSceneBackground(Camera cam)
+    {
+        Scene natureScene = EditorSceneManager.OpenScene(NatureScenePath, OpenSceneMode.Additive);
+        GameObject bg = new GameObject("Background (Nature_assets scene)");
+        foreach (GameObject root in natureScene.GetRootGameObjects())
+        {
+            if (root.GetComponentInChildren<Camera>(true) != null) continue;
+            GameObject copy = Object.Instantiate(root);
+            copy.name = root.name;
+            SceneManager.MoveGameObjectToScene(copy, bg.scene);
+            copy.transform.SetParent(bg.transform, true);
+        }
+        EditorSceneManager.CloseScene(natureScene, true);
+
+        foreach (var joint in bg.GetComponentsInChildren<Joint2D>(true)) Object.DestroyImmediate(joint);
+        foreach (var comp in bg.GetComponentsInChildren<CompositeCollider2D>(true)) Object.DestroyImmediate(comp);
+        foreach (var col in bg.GetComponentsInChildren<Collider2D>(true)) Object.DestroyImmediate(col);
+        foreach (var body in bg.GetComponentsInChildren<Rigidbody2D>(true)) Object.DestroyImmediate(body);
+        foreach (var src in bg.GetComponentsInChildren<AudioSource>(true)) Object.DestroyImmediate(src);
+
+        Renderer[] renderers = bg.GetComponentsInChildren<Renderer>(true);
+        Bounds bounds = renderers[0].bounds;
+        foreach (Renderer r in renderers)
+        {
+            bounds.Encapsulate(r.bounds);
+            r.sortingOrder -= 100;
+        }
+
+        // Scale the whole scene so it covers the camera view, then pin it behind the camera.
+        float viewH = cam.orthographicSize * 2f;
+        float viewW = viewH * 16f / 9f;
+        float scale = Mathf.Max(viewW / bounds.size.x, viewH / bounds.size.y) * 1.05f;
+        bg.transform.localScale = new Vector3(scale, scale, 1f);
+        bg.transform.SetParent(cam.transform, false);
+        bg.transform.localPosition = new Vector3(-bounds.center.x * scale, -bounds.center.y * scale, 20f);
     }
 
     static void BuildMusic()
