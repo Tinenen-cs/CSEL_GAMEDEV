@@ -236,7 +236,7 @@ public static class LevelBuilder
     {
         GameObject camGo = new GameObject("Main Camera");
         camGo.tag = "MainCamera";
-        camGo.transform.position = new Vector3(player.transform.position.x, player.transform.position.y + 1f, -10f);
+        camGo.transform.position = new Vector3(player.transform.position.x + 3f, 0.2f, -10f);
         Camera cam = camGo.AddComponent<Camera>();
         cam.orthographic = true;
         cam.orthographicSize = cameraSize;
@@ -246,36 +246,9 @@ public static class LevelBuilder
 
         CameraFollow follow = camGo.AddComponent<CameraFollow>();
         follow.followObject = player;
-        follow.followOffset = new Vector2(cameraSize * 16f / 9f - 1.5f, cameraSize - 1f);
+        follow.followOffset = new Vector2(cameraSize * 16f / 9f - 1.5f, 0f); // y offset 0: stay at the scene framing
         follow.speed = 3f;
 
-        BuildSky(cam);
-    }
-
-    // The Sky layer of the Nature_assets scene, pinned behind the camera so it covers the whole course.
-    static void BuildSky(Camera cam)
-    {
-        Scene nature = EditorSceneManager.OpenScene(NatureScenePath, OpenSceneMode.Additive);
-        GameObject sourceGrid = nature.GetRootGameObjects().First(g => g.GetComponent<Grid>() != null);
-        GameObject grid = Object.Instantiate(sourceGrid);
-        grid.name = "Sky (Nature_assets scene)";
-        SceneManager.MoveGameObjectToScene(grid, cam.gameObject.scene);
-        EditorSceneManager.CloseScene(nature, true);
-
-        foreach (Transform child in grid.transform.Cast<Transform>().ToArray())
-            if (child.name != "Sky") Object.DestroyImmediate(child.gameObject);
-
-        Tilemap sky = grid.GetComponentInChildren<Tilemap>();
-        sky.CompressBounds();
-        Bounds bounds = sky.localBounds;
-        sky.GetComponent<TilemapRenderer>().sortingOrder = -100;
-
-        float viewH = cam.orthographicSize * 2f;
-        float viewW = viewH * 16f / 9f;
-        float scale = Mathf.Max(viewW / bounds.size.x, viewH / bounds.size.y) * 1.1f;
-        grid.transform.SetParent(cam.transform, false);
-        grid.transform.localScale = new Vector3(scale, scale, 1f);
-        grid.transform.localPosition = new Vector3(-bounds.center.x * scale, -bounds.center.y * scale, 20f);
     }
 
     static void BuildMusic()
@@ -315,31 +288,45 @@ public static class LevelBuilder
         sr.sortingOrder = order;
     }
 
-    static void Spikes(float x, float topY)
+    // Row of spike-grass tiles; touching them kills the player (trap.cs).
+    static void Spikes(float x, float topY, int width = 1)
     {
-        GameObject go = new GameObject("Spikes (trap)");
+        GameObject go = new GameObject("Spike Grass (trap)");
         go.transform.SetParent(level, false);
         go.transform.position = new Vector2(x, topY + 0.5f);
-        AddTile(go.transform, Env(113), go.transform.position, 1);
+        for (int i = 0; i < width; i++)
+            AddTile(go.transform, Env(113), new Vector2(x - (width - 1) / 2f + i, topY + 0.5f), 4);
         BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = new Vector2(0.8f, 0.35f);
+        col.size = new Vector2(width - 0.2f, 0.4f);
         col.offset = new Vector2(0f, -0.3f);
         go.AddComponent<trap>();
     }
 
-    // Invisible trap collider over spike tiles that are already painted in the Nature scene.
-    static void SpikeTrap(float xStart, float xEnd, float topY)
+    // Trap over a spike-grass tile that is painted in the Nature scene itself.
+    static void SpikeTrap(Vector3 cellMin)
     {
-        GameObject go = new GameObject("Scene Spikes (trap)");
+        GameObject go = new GameObject("Scene Spike Grass (trap)");
         go.transform.SetParent(level, false);
-        go.transform.position = new Vector2((xStart + xEnd) / 2f, topY + 0.2f);
-        go.AddComponent<BoxCollider2D>().size = new Vector2(xEnd - xStart - 0.2f, 0.4f);
+        go.transform.position = cellMin + new Vector3(0.5f, 0.2f, 0f);
+        go.AddComponent<BoxCollider2D>().size = new Vector2(0.9f, 0.4f);
+        go.AddComponent<trap>();
+    }
+
+    // Heavy rock that rolls down slopes; touching it kills the player.
+    static void Boulder(float x, float y)
+    {
+        GameObject go = Piece("Rolling Boulder (trap)", Prop(25), new Vector2(x, y), new Vector2(1.2f, 1.2f), 5);
+        go.AddComponent<CircleCollider2D>().radius = 0.28f;
+        Rigidbody2D rb = go.AddComponent<Rigidbody2D>();
+        rb.mass = 4f;
+        rb.angularDamping = 0.2f;
         go.AddComponent<trap>();
     }
 
     // Pushable stone block.
-    static void Crate(float x, float floorY)
+    static void Crate(float x, float floorY, int stack = 1)
     {
+        for (int i = 1; i < stack; i++) Crate(x, floorY + i * 0.67f);
         GameObject go = Piece("Stone Block", Prop(15), new Vector2(x, floorY + 0.34f), new Vector2(0.7f, 1f));
         go.layer = groundLayer;
         go.AddComponent<BoxCollider2D>();
@@ -373,9 +360,8 @@ public static class LevelBuilder
     }
 
     // Swinging rock on a hinge. The rock skims the floor at player height.
-    static void Pendulum(float x, float floorY, float startAngle)
+    static void Pendulum(float x, float floorY, float startAngle, float length = 1.6f)
     {
-        const float length = 1.6f;
         Vector2 pivot = new Vector2(x, floorY + length + 0.75f);
         GameObject root = new GameObject("Pendulum");
         root.transform.SetParent(level, false);
@@ -451,12 +437,12 @@ public static class LevelBuilder
 
     // Layout of the Nature_assets scene in its own coordinates (1 tile = 1 unit):
     //   x -9..-8 cliff top y=1 (start), -8..-6 ledge y=0 over a cave, -6..-3 floor y=-1,
-    //   -3..2 slope up to y=0, 2..9 cave floor y=-1 (spike tiles at x 7..9), 9..15 ground y=0,
+    //   -3..2 slope up to y=0, 2..9 cave floor y=-1 (spike grass at x 7..9), 9..15 ground y=0,
     //   15..20 cave floor y=-1, 20..24 slope up to y=0 and a wall at x 23..24 (removed on each copy).
     const float SceneLeft = -9f, SceneRight = 24f;
 
-    // The course is the Nature_assets scene repeated as islands, with physics obstacles
-    // on each island and in the gaps between them.
+    // The course is the Nature_assets scene repeated as islands. Each island and each gap
+    // gets its own set of physics obstacles.
     static Vector2 BuildCourse()
     {
         level = new GameObject("Level").transform;
@@ -466,9 +452,17 @@ public static class LevelBuilder
         GameObject sourceGrid = nature.GetRootGameObjects().First(g => g.GetComponent<Grid>() != null);
         GameObject sourceProps = nature.GetRootGameObjects().FirstOrDefault(g => g.name == "Props");
         Camera natureCam = nature.GetRootGameObjects().Select(g => g.GetComponentInChildren<Camera>()).FirstOrDefault(c => c != null);
-        if (natureCam != null) cameraSize = natureCam.orthographicSize;
+        if (natureCam != null) cameraSize = natureCam.orthographicSize - 0.16f; // top edge lines up with the scene
+        Tilemap sourceSky = sourceGrid.GetComponentsInChildren<Tilemap>().First(t => t.name == "Sky");
+        Tilemap sourceGround = sourceGrid.GetComponentsInChildren<Tilemap>().First(t => t.name == "Ground");
+        TileBase earth = sourceGround.GetTile(new Vector3Int(0, -2, 0));     // plain dark earth
+        TileBase cliffWall = sourceGround.GetTile(new Vector3Int(-9, -1, 0)); // left cliff wall
+        TileBase cliffTop = sourceGround.GetTile(new Vector3Int(-9, 0, 0));   // left cliff grass corner
 
         float step = SceneRight - SceneLeft + GapWidth;
+        float courseEnd = (Islands - 1) * step + SceneRight;
+        BuildContinuousSky(sourceSky, SceneLeft - 20f, courseEnd + 20f);
+
         for (int k = 0; k < Islands; k++)
         {
             float ox = k * step;
@@ -481,10 +475,43 @@ public static class LevelBuilder
             grid.transform.position = sourceGrid.transform.position + offset;
             foreach (Tilemap tilemap in grid.GetComponentsInChildren<Tilemap>())
             {
-                if (tilemap.name == "Sky") continue;
+                if (tilemap.name == "Sky") { Object.DestroyImmediate(tilemap.gameObject); continue; }
                 // Open the right-hand wall so the player can leave the island.
                 if (k < Islands - 1)
+                {
                     for (int y = 0; y <= 2; y++) tilemap.SetTile(new Vector3Int(23, y, 0), null);
+                    tilemap.SetTile(new Vector3Int(22, 2, 0), null);
+                }
+                if (tilemap.name == "Ground")
+                {
+                    // Earth below the island so it reads as solid ground, not a cut-out strip.
+                    for (int x = -9; x <= 23; x++)
+                        for (int y = -3; y >= -14; y--) tilemap.SetTile(new Vector3Int(x, y, 0), earth);
+                    // Cliff walls down both island edges, using the scene's own left-cliff tiles
+                    // (mirrored for the right edge).
+                    for (int y = -2; y >= -14; y--) tilemap.SetTile(new Vector3Int(-9, y, 0), cliffWall);
+                    if (k < Islands - 1)
+                    {
+                        Matrix4x4 mirror = Matrix4x4.Scale(new Vector3(-1f, 1f, 1f));
+                        for (int y = -1; y >= -14; y--)
+                        {
+                            Vector3Int cell = new Vector3Int(23, y, 0);
+                            tilemap.SetTile(cell, y == -1 ? cliffTop : cliffWall);
+                            tilemap.SetTransformMatrix(cell, mirror);
+                        }
+                    }
+                }
+                // Spike-grass tiles are not solid; a trap sits on each one instead.
+                tilemap.CompressBounds();
+                foreach (Vector3Int cell in tilemap.cellBounds.allPositionsWithin)
+                {
+                    Sprite sp = tilemap.GetSprite(cell);
+                    if (sp != null && (sp.name.EndsWith("_113") || sp.name.EndsWith("_114")))
+                    {
+                        tilemap.SetColliderType(cell, Tile.ColliderType.None);
+                        SpikeTrap(tilemap.CellToWorld(cell));
+                    }
+                }
                 tilemap.gameObject.layer = groundLayer;
                 Rigidbody2D body = tilemap.gameObject.AddComponent<Rigidbody2D>();
                 body.bodyType = RigidbodyType2D.Static;
@@ -505,32 +532,8 @@ public static class LevelBuilder
                     if (sr.sharedMaterial == null && spriteMaterial != null) sr.sharedMaterial = spriteMaterial;
             }
 
-            // Obstacles on the island.
-            SpikeTrap(ox + 7f, ox + 9f, -1f);
-            if (k % 2 == 0) { Crate(ox - 5f, -1f); Crate(ox - 4.2f, -1f); }
-            if (k % 2 == 1) Pendulum(ox + 11.5f, 0f, k % 4 == 1 ? 65f : -65f);
-            if (k >= 1) Spikes(ox + 17.5f, -1f);
-            if (k >= 3) Pendulum(ox + 0.5f, 0f, k % 2 == 0 ? 60f : -60f);
-            if (k >= 5) Spikes(ox + 4.5f, -1f);
-
-            // Gap to the next island, crossed on a physics obstacle.
-            if (k < Islands - 1)
-            {
-                float gapStart = ox + SceneRight;
-                float gapEnd = gapStart + GapWidth;
-                switch (k % 3)
-                {
-                    case 0:
-                        FallingPlatform(gapStart + GapWidth / 2f, 0f);
-                        break;
-                    case 1:
-                        Seesaw(gapStart + GapWidth / 2f, 0f, GapWidth - 0.8f);
-                        break;
-                    default:
-                        Bridge(gapStart, gapEnd, 0f, 4);
-                        break;
-                }
-            }
+            IslandObstacles(k, ox);
+            if (k < Islands - 1) GapObstacle(k, ox + SceneRight, ox + SceneRight + GapWidth);
         }
         EditorSceneManager.CloseScene(nature, true);
 
@@ -541,7 +544,6 @@ public static class LevelBuilder
         wall.AddComponent<BoxCollider2D>().size = new Vector2(1f, 20f);
 
         // Fall zone: trap.cs reloads the scene, putting the player back at the start line.
-        float courseEnd = (Islands - 1) * step + SceneRight;
         GameObject fall = new GameObject("Fall Zone (trap)");
         fall.transform.SetParent(level, false);
         fall.transform.position = new Vector2((SceneLeft + courseEnd) / 2f, -9f);
@@ -551,5 +553,122 @@ public static class LevelBuilder
         Finish((Islands - 1) * step + 22.4f, 0f);
 
         return new Vector2(SceneLeft + 0.6f, 1.6f);
+    }
+
+    // One sky tilemap across the whole course, repeating the scene's sky columns and
+    // extending its top and bottom colours, so there are no picture edges while scrolling.
+    static void BuildContinuousSky(Tilemap sourceSky, float xStart, float xEnd)
+    {
+        sourceSky.CompressBounds();
+        BoundsInt src = sourceSky.cellBounds;
+
+        GameObject gridGo = new GameObject("Sky");
+        gridGo.transform.SetParent(level, false);
+        gridGo.AddComponent<Grid>();
+        GameObject tmGo = new GameObject("Sky Tilemap");
+        tmGo.transform.SetParent(gridGo.transform, false);
+        Tilemap sky = tmGo.AddComponent<Tilemap>();
+        tmGo.AddComponent<TilemapRenderer>().sortingOrder = -3;
+
+        for (int x = Mathf.FloorToInt(xStart); x <= Mathf.CeilToInt(xEnd); x++)
+        {
+            int sx = src.xMin + (((x - src.xMin) % src.size.x) + src.size.x) % src.size.x;
+            for (int y = -16; y <= 12; y++)
+            {
+                int sy = Mathf.Clamp(y, src.yMin, src.yMax - 1);
+                sky.SetTile(new Vector3Int(x, y, 0), sourceSky.GetTile(new Vector3Int(sx, sy, 0)));
+            }
+        }
+    }
+
+    // A different obstacle mix on every island.
+    static void IslandObstacles(int k, float ox)
+    {
+        switch (k)
+        {
+            case 0: // warm-up: push the stone blocks out of the way
+                Crate(ox - 5f, -1f);
+                Crate(ox - 4.2f, -1f, 2);
+                break;
+            case 1: // first swinging rock and a spike-grass patch
+                Spikes(ox - 4.5f, -1f);
+                Pendulum(ox + 11.5f, 0f, 65f);
+                break;
+            case 2: // stone tower in the cave, spikes after it
+                Crate(ox + 4f, -1f, 3);
+                Spikes(ox + 17.5f, -1f, 2);
+                break;
+            case 3: // two swinging rocks out of phase
+                Pendulum(ox + 0.5f, 0f, -60f);
+                Pendulum(ox + 12.5f, 0f, 60f, 1.8f);
+                Spikes(ox - 4f, -1f);
+                break;
+            case 4: // a boulder rolls into the cave, spikes on both cave floors
+                Boulder(ox + 0.8f, 1f);
+                Spikes(ox + 16.5f, -1f);
+                Spikes(ox + 18.5f, -1f);
+                break;
+            case 5: // tilting plank on the high ground, spike field below the ledge
+                Seesaw(ox + 12f, 0.3f, 3f);
+                Spikes(ox - 5f, -1f);
+                Spikes(ox - 3.8f, -1f);
+                Crate(ox + 17f, -1f, 2);
+                break;
+            case 6: // stone wall to push through, then a swinging rock guarding it
+                Crate(ox + 10.5f, 0f, 2);
+                Crate(ox + 11.2f, 0f, 2);
+                Pendulum(ox + 13.5f, 0f, -70f);
+                Spikes(ox + 4.5f, -1f);
+                break;
+            case 7: // spike-grass run
+                Spikes(ox - 5f, -1f, 2);
+                Spikes(ox + 3.5f, -1f);
+                Spikes(ox + 5.5f, -1f);
+                Spikes(ox + 17f, -1f, 2);
+                break;
+            case 8: // boulders and swinging rocks together
+                Boulder(ox + 0.8f, 1f);
+                Pendulum(ox - 4.5f, -1f, 55f, 1.5f);
+                Pendulum(ox + 11f, 0f, -65f);
+                Spikes(ox + 16f, -1f);
+                break;
+            default: // final island: everything before the finish sign
+                Crate(ox - 4.5f, -1f, 2);
+                Pendulum(ox + 0.5f, 0f, 60f);
+                Spikes(ox + 4f, -1f);
+                Pendulum(ox + 12f, 0f, -60f, 1.8f);
+                Spikes(ox + 17.5f, -1f, 2);
+                break;
+        }
+    }
+
+    // A different physics crossing in every gap.
+    static void GapObstacle(int k, float gapStart, float gapEnd)
+    {
+        float mid = (gapStart + gapEnd) / 2f;
+        switch (k)
+        {
+            case 0: Bridge(gapStart, gapEnd, 0f, 4); break;
+            case 1: FallingPlatform(mid, 0f); break;
+            case 2: Seesaw(mid, 0f, GapWidth - 0.8f); break;
+            case 3:
+                FallingPlatform(gapStart + 1f, 0f, 1f);
+                FallingPlatform(gapEnd - 1f, 0.6f, 1f);
+                break;
+            case 4:
+                Bridge(gapStart, gapEnd, 0f, 4);
+                Pendulum(mid, 0f, 60f);
+                break;
+            case 5: Seesaw(mid, 0.2f, GapWidth - 1.2f); break;
+            case 6:
+                FallingPlatform(gapStart + 1.2f, 0.3f, 1.2f);
+                FallingPlatform(gapEnd - 1.2f, -0.2f, 1.2f);
+                break;
+            case 7:
+                Bridge(gapStart, gapEnd, 0f, 5);
+                Crate(mid, 0f); // loose block weighing the bridge down
+                break;
+            default: FallingPlatform(mid, 0.4f, 1.2f); break;
+        }
     }
 }
