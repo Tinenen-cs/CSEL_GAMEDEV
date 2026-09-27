@@ -52,6 +52,7 @@ public static class LevelBuilder
         GameObject player = BuildPlayer(controller, spawn);
         BuildCamera(player);
         BuildMusic();
+        BuildDeathSound();
 
         EditorSceneManager.SaveScene(scene, ScenePath);
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
@@ -255,6 +256,17 @@ public static class LevelBuilder
         groundLock.whatIsGround = 1 << groundLayer;
         groundLock.clampUntilX = SceneRight;
 
+    }
+
+    static void BuildDeathSound()
+    {
+        GameObject sfx = new GameObject("Death Sound");
+        AudioSource source = sfx.AddComponent<AudioSource>();
+        source.clip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/DeathSFX.mp3");
+        source.playOnAwake = false;
+        source.loop = false;
+        source.volume = 0.9f;
+        sfx.AddComponent<DeathSound>();
     }
 
     static void BuildMusic()
@@ -497,6 +509,9 @@ public static class LevelBuilder
                 }
                 if (tilemap.name == "Ground")
                 {
+                    // Remove the first cave ceiling (x 2..9) so that stretch is open sky.
+                    for (int x = 2; x <= 8; x++)
+                        for (int y = 1; y <= 2; y++) tilemap.SetTile(new Vector3Int(x, y, 0), null);
                     // Earth below the island so it reads as solid ground, not a cut-out strip.
                     for (int x = -9; x <= 23; x++)
                         for (int y = -3; y >= -14; y--) tilemap.SetTile(new Vector3Int(x, y, 0), earth);
