@@ -468,6 +468,13 @@ public static class LevelBuilder
             float ox = k * step;
             Vector3 offset = new Vector3(ox, 0f, 0f);
 
+            if (k > 0)
+            {
+                BuildSection(k, ox);
+                if (k < Islands - 1) GapObstacle(k, ox + SceneRight, ox + SceneRight + GapWidth);
+                continue;
+            }
+
             GameObject grid = Object.Instantiate(sourceGrid);
             grid.name = "Nature_assets Island " + (k + 1);
             SceneManager.MoveGameObjectToScene(grid, level.gameObject.scene);
@@ -581,65 +588,213 @@ public static class LevelBuilder
         }
     }
 
-    // A different obstacle mix on every island.
+    // Section 1 (the exact Nature_assets scene): push the stone blocks out of the way.
     static void IslandObstacles(int k, float ox)
     {
+        Crate(ox - 5f, -1f);
+        Crate(ox - 4.2f, -1f, 2);
+    }
+
+    // ---------- generated sections 2-10 ----------
+    // Terrain is one character per column (33 columns, x -9..23 like the Nature scene):
+    //   '0' ground top at y=-1, '1' at y=0, '2' at y=1, '_' pit.
+    // Every section starts on a cliff ('2') and ends at y=0 ('1') so the gap crossings line up.
+    static readonly string[] Terrain =
+    {
+        null, // section 1 is the Nature_assets scene
+        "211110000001112222111000000111111", // 2 meadow steps
+        "2222211111__11111000__00001111111", // 3 rocky pits
+        "211122211100011122211100011122211", // 4 rolling hills
+        "21111111__1111111__11111111111111", // 5 flat plain with pits
+        "222221110000000001112222111111111", // 6 valley
+        "210012210012210012211__1122111111", // 7 stairs
+        "222222__111__000000__111222111111", // 8 broken ground
+        "211000__000111222222111__11100011", // 9 plateau
+        "21111000111222__22211100011111111", // 10 finish
+    };
+
+    // Decoration themes, as Nature_props sprite indices.
+    static readonly int[][] Themes =
+    {
+        new[] { 27, 28, 29, 11, 28 },          // forest
+        new[] { 17, 18, 19, 21, 22, 26, 25 },  // rocks
+        new[] { 0, 9, 0, 11, 9 },              // blossom
+        new[] { 1, 2, 3, 4, 5 },               // bare trees
+        new[] { 27, 19, 9, 38, 39, 28 },       // mixed
+    };
+
+    static int Height(string terrain, int col)
+    {
+        if (col < 0 || col >= terrain.Length || terrain[col] == '_') return -99;
+        return terrain[col] - '0' - 1;
+    }
+
+    static TileBase NatureTile(int i)
+    {
+        return AssetDatabase.LoadAssetAtPath<TileBase>("Assets/Nature_pixel_art_assets/Nature_tiles_01/nature_environment_01_" + i + ".asset");
+    }
+
+    static void BuildSection(int k, float ox)
+    {
+        string terrain = Terrain[k];
+        System.Random rng = new System.Random(k * 7919);
+
+        GameObject gridGo = new GameObject("Section " + (k + 1));
+        gridGo.transform.SetParent(level, false);
+        gridGo.transform.position = new Vector3(ox, 0f, 0f);
+        gridGo.AddComponent<Grid>();
+        Tilemap ground = NewTilemap(gridGo.transform, "Ground", 3);
+        Tilemap platforms = NewTilemap(gridGo.transform, "Platform", 1);
+
+        TileBase corner = NatureTile(73), wall = NatureTile(94), earth = NatureTile(40);
+        int[] grass = { 22, 23, 41, 42, 44, 46, 47, 48 };
+        Matrix4x4 mirror = Matrix4x4.Scale(new Vector3(-1f, 1f, 1f));
+
+        for (int c = 0; c < terrain.Length; c++)
+        {
+            int top = Height(terrain, c);
+            if (top == -99) continue;
+            int left = Height(terrain, c - 1), right = Height(terrain, c + 1);
+            int x = (int)SceneLeft + c;
+
+            // Grass on top, with a cliff corner where the neighbour is lower.
+            Vector3Int topCell = new Vector3Int(x, top - 1, 0);
+            if (left < top) ground.SetTile(topCell, corner);
+            else if (right < top) { ground.SetTile(topCell, corner); ground.SetTransformMatrix(topCell, mirror); }
+            else ground.SetTile(topCell, NatureTile(grass[rng.Next(grass.Length)]));
+
+            // Earth below, with cliff walls on any exposed side.
+            for (int y = top - 2; y >= -14; y--)
+            {
+                Vector3Int cell = new Vector3Int(x, y, 0);
+                if (left <= y) ground.SetTile(cell, wall);
+                else if (right <= y) { ground.SetTile(cell, wall); ground.SetTransformMatrix(cell, mirror); }
+                else ground.SetTile(cell, earth);
+            }
+        }
+
+        foreach (Tilemap tm in new[] { ground, platforms }) MakeSolid(tm);
+
+        System.Func<int, float> X = c => ox + SceneLeft + c + 0.5f;
+        System.Func<int, float> Top = c => Height(terrain, c);
+        var used = new System.Collections.Generic.HashSet<int>();
+        System.Action<int> Use = c => { for (int i = c - 1; i <= c + 1; i++) used.Add(i); };
+
+        // Floating grass platforms (Platform tiles 116/118 = left/right ends), and obstacles.
+        System.Action<int, int> Ledge = (c, y) =>
+        {
+            platforms.SetTile(new Vector3Int((int)SceneLeft + c, y, 0), NatureTile(116));
+            platforms.SetTile(new Vector3Int((int)SceneLeft + c + 1, y, 0), NatureTile(118));
+        };
+
         switch (k)
         {
-            case 0: // warm-up: push the stone blocks out of the way
-                Crate(ox - 5f, -1f);
-                Crate(ox - 4.2f, -1f, 2);
+            case 1: // meadow steps
+                Spikes(X(7), Top(7)); Use(7);
+                Pendulum(X(16), Top(16), 65f); Use(16);
+                Spikes(X(23) + 0.5f, Top(23), 2); Use(23); Use(24);
+                Crate(X(28), Top(28)); Use(28);
+                Ledge(8, 1);
                 break;
-            case 1: // first swinging rock and a spike-grass patch
-                Spikes(ox - 4.5f, -1f);
-                Pendulum(ox + 11.5f, 0f, 65f);
+            case 2: // rocky pits
+                Crate(X(14), Top(14), 2); Use(14);
+                Spikes(X(18), Top(18)); Use(18);
+                Pendulum(X(28), Top(28), -60f); Use(28);
+                Ledge(20, 1);
                 break;
-            case 2: // stone tower in the cave, spikes after it
-                Crate(ox + 4f, -1f, 3);
-                Spikes(ox + 17.5f, -1f, 2);
+            case 3: // rolling hills: a boulder rolls down the first hill
+                Boulder(X(6) + 0.45f, Top(6) + 0.4f); Use(6);
+                Pendulum(X(11), Top(11), 60f, 1.8f); Use(11);
+                Spikes(X(17), Top(17)); Use(17);
+                Pendulum(X(23), Top(23), -60f, 1.8f); Use(23);
+                Ledge(10, 1);
                 break;
-            case 3: // two swinging rocks out of phase
-                Pendulum(ox + 0.5f, 0f, -60f);
-                Pendulum(ox + 12.5f, 0f, 60f, 1.8f);
-                Spikes(ox - 4f, -1f);
+            case 4: // flat plain with pits: falling platform over the second pit
+                Spikes(X(4), Top(4)); Use(4);
+                Pendulum(X(13), Top(13), 70f); Use(13);
+                FallingPlatform(X(17) + 0.5f, 0f, 1.6f);
+                Spikes(X(22) + 0.5f, Top(22), 2); Use(22); Use(23);
+                Crate(X(27), Top(27), 3); Use(27);
                 break;
-            case 4: // a boulder rolls into the cave, spikes on both cave floors
-                Boulder(ox + 0.8f, 1f);
-                Spikes(ox + 16.5f, -1f);
-                Spikes(ox + 18.5f, -1f);
+            case 5: // valley: boulder rolls in, spikes and a swinging rock at the bottom
+                Boulder(X(4) + 0.45f, Top(4) + 0.4f); Use(4);
+                Spikes(X(10), Top(10)); Use(10);
+                Pendulum(X(12), Top(12), -65f, 1.8f); Use(12);
+                Spikes(X(14), Top(14)); Use(14);
+                Seesaw(X(21) + 0.5f, Top(21) + 0.3f, 3f); Use(21); Use(22);
+                Ledge(12, 1);
                 break;
-            case 5: // tilting plank on the high ground, spike field below the ledge
-                Seesaw(ox + 12f, 0.3f, 3f);
-                Spikes(ox - 5f, -1f);
-                Spikes(ox - 3.8f, -1f);
-                Crate(ox + 17f, -1f, 2);
+            case 6: // stairs: spike grass in every dip
+                Spikes(X(2) + 0.5f, Top(2), 2); Use(2); Use(3);
+                Spikes(X(8) + 0.5f, Top(8), 2); Use(8); Use(9);
+                Spikes(X(14) + 0.5f, Top(14), 2); Use(14); Use(15);
+                Crate(X(28), Top(28)); Use(28);
+                Pendulum(X(30), Top(30), 60f); Use(30);
                 break;
-            case 6: // stone wall to push through, then a swinging rock guarding it
-                Crate(ox + 10.5f, 0f, 2);
-                Crate(ox + 11.2f, 0f, 2);
-                Pendulum(ox + 13.5f, 0f, -70f);
-                Spikes(ox + 4.5f, -1f);
+            case 7: // broken ground: three pits, a swinging rock over the low field
+                Spikes(X(14), Top(14)); Use(14);
+                Pendulum(X(16), Top(16), -70f, 1.8f); Use(16);
+                FallingPlatform(X(19) + 0.5f, -0.5f, 1.4f);
+                Spikes(X(29), Top(29)); Use(29);
+                Ledge(15, 1);
                 break;
-            case 7: // spike-grass run
-                Spikes(ox - 5f, -1f, 2);
-                Spikes(ox + 3.5f, -1f);
-                Spikes(ox + 5.5f, -1f);
-                Spikes(ox + 17f, -1f, 2);
+            case 8: // plateau: boulder drops off the edge, rocks swing above
+                Spikes(X(4), Top(4)); Use(4);
+                Crate(X(9), Top(9)); Use(9);
+                Pendulum(X(16), Top(16), 60f); Use(16);
+                Boulder(X(19) + 0.45f, Top(19) + 0.4f); Use(19);
+                Spikes(X(29), Top(29)); Use(29);
+                Ledge(23, 1);
                 break;
-            case 8: // boulders and swinging rocks together
-                Boulder(ox + 0.8f, 1f);
-                Pendulum(ox - 4.5f, -1f, 55f, 1.5f);
-                Pendulum(ox + 11f, 0f, -65f);
-                Spikes(ox + 16f, -1f);
-                break;
-            default: // final island: everything before the finish sign
-                Crate(ox - 4.5f, -1f, 2);
-                Pendulum(ox + 0.5f, 0f, 60f);
-                Spikes(ox + 4f, -1f);
-                Pendulum(ox + 12f, 0f, -60f, 1.8f);
-                Spikes(ox + 17.5f, -1f, 2);
+            default: // finish
+                Crate(X(6), Top(6), 2); Use(6);
+                Pendulum(X(12), Top(12), 60f); Use(12);
+                Spikes(X(23), Top(23)); Use(23);
+                Pendulum(X(27), Top(27), -60f); Use(27);
+                Ledge(14, 2);
+                Use(31);
                 break;
         }
+
+        // Scenery from the section's theme, only on flat ground away from obstacles.
+        int[] theme = Themes[(k - 1) % Themes.Length];
+        for (int c = 2; c < terrain.Length - 2; c += 2 + rng.Next(2))
+        {
+            if (used.Contains(c) || Height(terrain, c) == -99 || Height(terrain, c - 1) != Height(terrain, c) || Height(terrain, c + 1) != Height(terrain, c)) continue;
+            Scenery(Prop(theme[rng.Next(theme.Length)]), X(c), Top(c), 2);
+        }
+        // Distant tree silhouettes behind everything.
+        for (int i = 0; i < 3; i++)
+        {
+            int c = 4 + rng.Next(terrain.Length - 8);
+            if (Height(terrain, c) == -99) continue;
+            Scenery(Prop(30 + rng.Next(8)), X(c), Top(c), -2);
+        }
+    }
+
+    static Tilemap NewTilemap(Transform grid, string name, int order)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(grid, false);
+        Tilemap tm = go.AddComponent<Tilemap>();
+        go.AddComponent<TilemapRenderer>().sortingOrder = order;
+        return tm;
+    }
+
+    static void MakeSolid(Tilemap tilemap)
+    {
+        tilemap.gameObject.layer = groundLayer;
+        Rigidbody2D body = tilemap.gameObject.AddComponent<Rigidbody2D>();
+        body.bodyType = RigidbodyType2D.Static;
+        TilemapCollider2D tileCollider = tilemap.gameObject.AddComponent<TilemapCollider2D>();
+        tileCollider.compositeOperation = Collider2D.CompositeOperation.Merge;
+        tilemap.gameObject.AddComponent<CompositeCollider2D>();
+    }
+
+    // Non-colliding decoration standing on the ground.
+    static void Scenery(Sprite sprite, float x, float groundY, int order)
+    {
+        Piece("Scenery", sprite, new Vector2(x, groundY + sprite.bounds.extents.y), Vector2.one, order);
     }
 
     // A different physics crossing in every gap.
